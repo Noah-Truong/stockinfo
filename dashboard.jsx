@@ -1,17 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
-
-const MOCK_STOCKS = [
-  { ticker: "AAPL", name: "Apple Inc.", sector: "Technology", price: 211.45, target: 245.00, pe: 32.1, ev_ebitda: 22.4, recommendation: "BUY", analysts: 42 },
-  { ticker: "MSFT", name: "Microsoft Corp.", sector: "Technology", price: 415.20, target: 510.00, pe: 35.8, ev_ebitda: 24.1, recommendation: "STRONG BUY", analysts: 54 },
-  { ticker: "GOOGL", name: "Alphabet Inc.", sector: "Communication Services", price: 178.90, target: 215.00, pe: 21.4, ev_ebitda: 13.8, recommendation: "BUY", analysts: 48 },
-  { ticker: "AMZN", name: "Amazon.com Inc.", sector: "Consumer Cyclical", price: 210.30, target: 240.00, pe: 42.0, ev_ebitda: 19.2, recommendation: "BUY", analysts: 55 },
-  { ticker: "NVDA", name: "NVIDIA Corp.", sector: "Technology", price: 875.50, target: 1050.00, pe: 68.2, ev_ebitda: 52.1, recommendation: "STRONG BUY", analysts: 50 },
-  { ticker: "META", name: "Meta Platforms", sector: "Communication Services", price: 595.30, target: 680.00, pe: 27.3, ev_ebitda: 17.4, recommendation: "BUY", analysts: 58 },
-  { ticker: "JPM", name: "JPMorgan Chase", sector: "Financial Services", price: 242.10, target: 225.00, pe: 13.2, ev_ebitda: 9.8, recommendation: "HOLD", analysts: 24 },
-  { ticker: "XOM", name: "Exxon Mobil", sector: "Energy", price: 112.40, target: 125.00, pe: 14.1, ev_ebitda: 8.2, recommendation: "BUY", analysts: 28 },
-  { ticker: "JNJ", name: "Johnson & Johnson", sector: "Healthcare", price: 152.80, target: 175.00, pe: 16.4, ev_ebitda: 12.1, recommendation: "BUY", analysts: 20 },
-  { ticker: "BAC", name: "Bank of America", sector: "Financial Services", price: 44.20, target: 38.00, pe: 12.8, ev_ebitda: 11.2, recommendation: "HOLD", analysts: 30 },
-];
+import { useState, useEffect } from "react";
 
 const SECTOR_BENCHMARKS = {
   "Technology": { pe: 28.0, ev_ebitda: 20.0 },
@@ -145,13 +132,45 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 export default function StockDashboard() {
-  const [stocks, setStocks] = useState(MOCK_STOCKS);
+  const [stocks, setStocks] = useState([]);
   const [filter, setFilter] = useState("ALL");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("upside");
   const [newTicker, setNewTicker] = useState("");
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [emailSent, setEmailSent] = useState(false);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await fetch("alerts_output.json", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const runTime = json.run_time || json.runTime;
+        if (runTime) {
+          const dt = new Date(runTime);
+          if (!isNaN(dt.getTime())) setLastUpdated(dt);
+        }
+        const watchlist = json.watchlist || [];
+        const mapped = watchlist.map((d) => ({
+          ticker: d.ticker,
+          name: d.name || d.ticker,
+          sector: d.sector || "Default",
+          price: d.current_price ?? null,
+          target: d.target_mean ?? null,
+          pe: d.pe_ratio ?? null,
+          ev_ebitda: d.ev_ebitda ?? null,
+          recommendation: d.recommendation || "N/A",
+          analysts: d.num_analysts ?? 0,
+        }));
+        setStocks(mapped);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to load alerts_output.json", e);
+      }
+    }
+    loadData();
+  }, []);
 
   const allAlerts = stocks.flatMap(s => getAlerts(s).map(a => ({ ...a, ticker: s.ticker, name: s.name })));
   const upsideAlerts = allAlerts.filter(a => a.type === "UPSIDE");
@@ -187,15 +206,8 @@ export default function StockDashboard() {
 
   const handleAddTicker = () => {
     const t = newTicker.trim().toUpperCase();
-    if (!t || stocks.find(s => s.ticker === t)) { setNewTicker(""); return; }
-    setStocks(prev => [...prev, {
-      ticker: t, name: t, sector: "Technology",
-      price: 100 + Math.random() * 200,
-      target: 110 + Math.random() * 250,
-      pe: 15 + Math.random() * 30,
-      ev_ebitda: 8 + Math.random() * 20,
-      recommendation: "BUY", analysts: Math.floor(Math.random() * 30) + 5
-    }]);
+    if (!t) return;
+    alert("To add a real ticker, edit CONFIG['watchlist'] in stock_alerts.py and re-run the backend script.");
     setNewTicker("");
   };
 
@@ -372,7 +384,7 @@ export default function StockDashboard() {
         {/* Disclaimer */}
         <div style={{ color: "#1e3a5f", fontSize: 11, textAlign: "center", marginTop: 32, lineHeight: 1.6 }}>
           ⚠️ For informational use only — not financial advice.<br />
-          Connect the Python backend script to scrape live data from Yahoo Finance and send real email alerts.
+          Run the Python backend script to fetch live data and generate alerts_output.json for this dashboard.
         </div>
       </div>
     </div>
