@@ -297,12 +297,14 @@ def send_email(alerts: list, all_data: list):
         target = d.get("target_mean")
         upside = f"{((target - price) / price * 100):.1f}%" if price and target and price > 0 else "N/A"
         up_color = "#16a34a" if upside != "N/A" and float(upside.replace('%','')) > 0 else "#dc2626"
+        price_str  = f"${price:.2f}"  if price  else "N/A"
+        target_str = f"${target:.2f}" if target else "N/A"
         rows_watchlist += f"""
         <tr>
           <td style="padding:8px 10px;border-bottom:1px solid #1e293b;font-weight:700;color:#f8fafc">{d['ticker']}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#94a3b8">{d.get('name','')}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#e2e8f0">${price:.2f if price else 'N/A'}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#e2e8f0">${target:.2f if target else 'N/A'}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#e2e8f0">{price_str}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#e2e8f0">{target_str}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:{up_color};font-weight:700">{upside}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#94a3b8">{d.get('pe_ratio') and f"{d['pe_ratio']:.1f}x" or 'N/A'}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #1e293b;color:#94a3b8">{d.get('ev_ebitda') and f"{d['ev_ebitda']:.1f}x" or 'N/A'}</td>

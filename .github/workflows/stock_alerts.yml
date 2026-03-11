@@ -5,8 +5,8 @@ on:
     # Runs every day at 9:00 AM and 3:00 PM UTC (adjust to your timezone)
     # 9:00 UTC = 4:00 AM EST / 1:00 AM PST
     # 15:00 UTC = 10:00 AM EST / 7:00 AM PST
-    - cron: '0 9 * * 1-5'   # Weekdays 9AM UTC
-    - cron: '0 15 * * 1-5'  # Weekdays 3PM UTC
+    - cron: '30 14 * * 1-5'  # 6:30 AM PST (UTC-8) / 7:30 AM PDT (UTC-7)
+    - cron: '0 21 * * 1-5'   # 1:00 PM PST (UTC-8) / 2:00 PM PDT (UTC-7)
 
   # Also lets you trigger it manually from GitHub's website
   workflow_dispatch:
