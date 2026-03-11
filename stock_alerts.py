@@ -16,7 +16,7 @@ Usage:
 """
 
 import os
-import yfinance as yf
+import requests
 import pandas as pd
 import smtplib
 import json
@@ -98,25 +98,62 @@ log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
-#  DATA FETCHING
+#  DATA FETCHING (FactSet)
 # ─────────────────────────────────────────────
-def fetch_stock_data(ticker: str) -> dict:
-    """Fetch key metrics for a ticker using yfinance."""
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+FACTSET_BASE_URL = os.environ.get("FACTSET_BASE_URL", "https://api.factset.com")
+FACTSET_PRICES_PATH = os.environ.get("FACTSET_PRICES_PATH", "/prices/v1/latest")
+FACTSET_FUNDAMENTALS_PATH = os.environ.get("FACTSET_FUNDAMENTALS_PATH", "/fundamentals/v1/metrics")
+FACTSET_API_KEY = os.environ.get("FACTSET_API_KEY")
+FACTSET_API_SECRET = os.environ.get("FACTSET_API_SECRET")
 
-        current_price   = info.get("currentPrice") or info.get("regularMarketPrice")
-        target_mean     = info.get("targetMeanPrice")
-        target_high     = info.get("targetHighPrice")
-        target_low      = info.get("targetLowPrice")
-        pe_ratio        = info.get("trailingPE") or info.get("forwardPE")
-        ev_ebitda       = info.get("enterpriseToEbitda")
-        sector          = info.get("sector", "Default")
-        name            = info.get("shortName", ticker)
-        recommendation  = info.get("recommendationKey", "N/A").upper()
-        num_analysts    = info.get("numberOfAnalystOpinions", 0)
-        market_cap      = info.get("marketCap")
+
+def _factset_get(path: str, params: dict) -> dict:
+    """
+    Helper to call a FactSet REST endpoint.
+    Expects basic-auth style credentials via FACTSET_API_KEY / FACTSET_API_SECRET.
+    """
+    url = f"{FACTSET_BASE_URL}{path}"
+    auth = (FACTSET_API_KEY, FACTSET_API_SECRET) if FACTSET_API_KEY and FACTSET_API_SECRET else None
+    resp = requests.get(url, params=params, auth=auth, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_stock_data(ticker: str) -> dict:
+    """
+    Fetch key metrics for a ticker using FactSet APIs.
+
+    This implementation assumes your FactSet endpoints return JSON with a top-level
+    'data' array of objects containing the required fields. Adjust the field names
+    or paths below to match your specific FactSet responses.
+    """
+    try:
+        # Prices (current price, market cap, name, sector)
+        prices_json = _factset_get(
+            FACTSET_PRICES_PATH,
+            params={"symbols": ticker}
+        )
+        price_item = (prices_json.get("data") or [{}])[0]
+
+        # Fundamentals / estimates (targets, valuation ratios, recommendation)
+        fundamentals_json = _factset_get(
+            FACTSET_FUNDAMENTALS_PATH,
+            params={"symbols": ticker}
+        )
+        fund_item = (fundamentals_json.get("data") or [{}])[0]
+
+        current_price = price_item.get("price") or price_item.get("lastPrice")
+        target_mean = fund_item.get("targetMean") or fund_item.get("targetMeanPrice")
+        target_high = fund_item.get("targetHigh") or fund_item.get("targetHighPrice")
+        target_low = fund_item.get("targetLow") or fund_item.get("targetLowPrice")
+        pe_ratio = fund_item.get("trailingPE") or fund_item.get("forwardPE") or fund_item.get("peRatio")
+        ev_ebitda = fund_item.get("enterpriseToEbitda") or fund_item.get("evToEbitda")
+        sector = price_item.get("sector") or fund_item.get("sector") or "Default"
+        name = price_item.get("name") or price_item.get("companyName") or fund_item.get("name") or ticker
+        recommendation_raw = fund_item.get("recommendation") or fund_item.get("recommendationKey") or "N/A"
+        recommendation = str(recommendation_raw).upper()
+        num_analysts = fund_item.get("numAnalysts") or fund_item.get("numberOfAnalystOpinions") or 0
+        market_cap = price_item.get("marketCap") or fund_item.get("marketCap")
 
         return {
             "ticker":         ticker,
@@ -131,10 +168,10 @@ def fetch_stock_data(ticker: str) -> dict:
             "recommendation": recommendation,
             "num_analysts":   num_analysts,
             "market_cap":     market_cap,
-            "error":          None
+            "error":          None,
         }
     except Exception as e:
-        log.warning(f"Failed to fetch data for {ticker}: {e}")
+        log.warning(f"Failed to fetch data for {ticker} from FactSet: {e}")
         return {"ticker": ticker, "error": str(e)}
 
 
