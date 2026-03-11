@@ -101,59 +101,102 @@ log = logging.getLogger(__name__)
 #  DATA FETCHING (FactSet)
 # ─────────────────────────────────────────────
 FACTSET_BASE_URL = os.environ.get("FACTSET_BASE_URL", "https://api.factset.com")
-FACTSET_PRICES_PATH = os.environ.get("FACTSET_PRICES_PATH", "/prices/v1/latest")
-FACTSET_FUNDAMENTALS_PATH = os.environ.get("FACTSET_FUNDAMENTALS_PATH", "/fundamentals/v1/metrics")
+# Set these to the exact paths from the FactSet Prices / Fundamentals API docs
+FACTSET_PRICES_PATH = os.environ.get("FACTSET_PRICES_PATH", "/content/prices/v2/prices")
+FACTSET_FUNDAMENTALS_PATH = os.environ.get("FACTSET_FUNDAMENTALS_PATH", "/content/fundamentals/v1/fundamentals")
 FACTSET_API_KEY = os.environ.get("FACTSET_API_KEY")
 FACTSET_API_SECRET = os.environ.get("FACTSET_API_SECRET")
 
+# Comma-separated list of metric codes for the Fundamentals API, e.g.
+# "FF_PX_TARGET_MEAN,FF_PX_TARGET_HIGH,FF_PX_TARGET_LOW,FF_PE_TRAIL,FF_EV_EBITDA"
+FACTSET_FUNDAMENTALS_METRICS = os.environ.get(
+    "FACTSET_FUNDAMENTALS_METRICS",
+    "FF_PX_TARGET_MEAN,FF_PX_TARGET_HIGH,FF_PX_TARGET_LOW,FF_PE_TRAIL,FF_EV_EBITDA",
+).split(",")
 
-def _factset_get(path: str, params: dict) -> dict:
+
+def _factset_request(method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
     """
-    Helper to call a FactSet REST endpoint.
-    Expects basic-auth style credentials via FACTSET_API_KEY / FACTSET_API_SECRET.
+    Helper to call a FactSet REST endpoint using basic auth.
+    Supports both GET (with query params) and POST (with JSON body), matching the
+    patterns from the official Prices and Fundamentals API examples.
     """
     url = f"{FACTSET_BASE_URL}{path}"
     auth = (FACTSET_API_KEY, FACTSET_API_SECRET) if FACTSET_API_KEY and FACTSET_API_SECRET else None
-    resp = requests.get(url, params=params, auth=auth, timeout=15)
+    resp = requests.request(method, url, params=params, json=json_body, auth=auth, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
 
 def fetch_stock_data(ticker: str) -> dict:
     """
-    Fetch key metrics for a ticker using FactSet APIs.
+    Fetch key metrics for a ticker using FactSet Prices + Fundamentals APIs.
 
-    This implementation assumes your FactSet endpoints return JSON with a top-level
-    'data' array of objects containing the required fields. Adjust the field names
-    or paths below to match your specific FactSet responses.
+    This follows the request/response patterns from:
+      - Prices API:  data[ { fsymId, date, price, requestId, ... } ]
+      - Fundamentals API: data[ { requestId, metric, value, ... }, ... ]
     """
     try:
-        # Prices (current price, market cap, name, sector)
-        prices_json = _factset_get(
-            FACTSET_PRICES_PATH,
-            params={"symbols": ticker}
-        )
-        price_item = (prices_json.get("data") or [{}])[0]
+        # Most FactSet equity ids are of the form "TICKER-COUNTRYCODE"
+        fid = f"{ticker}-US"
 
-        # Fundamentals / estimates (targets, valuation ratios, recommendation)
-        fundamentals_json = _factset_get(
-            FACTSET_FUNDAMENTALS_PATH,
-            params={"symbols": ticker}
-        )
-        fund_item = (fundamentals_json.get("data") or [{}])[0]
+        # 1) Prices API — POST body with ids[], date range, etc.
+        prices_body = {
+            "ids": [fid],
+            "startDate": datetime.now().strftime("%Y-%m-%d"),
+            "endDate": datetime.now().strftime("%Y-%m-%d"),
+            "frequency": "D",
+            "calendar": "FIVEDAY",
+            "currency": "LOCAL",
+            "adjust": "SPLIT",
+        }
+        prices_json = _factset_request("POST", FACTSET_PRICES_PATH, json_body=prices_body)
+        prices_data = prices_json.get("data") or []
 
-        current_price = price_item.get("price") or price_item.get("lastPrice")
-        target_mean = fund_item.get("targetMean") or fund_item.get("targetMeanPrice")
-        target_high = fund_item.get("targetHigh") or fund_item.get("targetHighPrice")
-        target_low = fund_item.get("targetLow") or fund_item.get("targetLowPrice")
-        pe_ratio = fund_item.get("trailingPE") or fund_item.get("forwardPE") or fund_item.get("peRatio")
-        ev_ebitda = fund_item.get("enterpriseToEbitda") or fund_item.get("evToEbitda")
-        sector = price_item.get("sector") or fund_item.get("sector") or "Default"
-        name = price_item.get("name") or price_item.get("companyName") or fund_item.get("name") or ticker
-        recommendation_raw = fund_item.get("recommendation") or fund_item.get("recommendationKey") or "N/A"
-        recommendation = str(recommendation_raw).upper()
-        num_analysts = fund_item.get("numAnalysts") or fund_item.get("numberOfAnalystOpinions") or 0
-        market_cap = price_item.get("marketCap") or fund_item.get("marketCap")
+        # Take the last record for this id if multiple rows are returned
+        price_item = next(
+            (row for row in reversed(prices_data) if row.get("requestId") == fid or row.get("requestId") == ticker),
+            (prices_data[-1] if prices_data else {}),
+        )
+
+        # 2) Fundamentals API — POST body with ids[], metrics[], etc.
+        fundamentals_body = {
+            "data": {
+                "ids": [fid],
+                "periodicity": "ANN",
+                "metrics": FACTSET_FUNDAMENTALS_METRICS,
+                "currency": "USD",
+                "updateType": "RP",
+            }
+        }
+        fundamentals_json = _factset_request("POST", FACTSET_FUNDAMENTALS_PATH, json_body=fundamentals_body)
+        fundamentals_data = fundamentals_json.get("data") or []
+
+        # Convert list of {metric, value, ...} into a simple dict: metric -> latest value
+        metric_values: dict[str, float] = {}
+        for row in fundamentals_data:
+            m = row.get("metric")
+            v = row.get("value")
+            if m is not None and v is not None:
+                metric_values[m] = v
+
+        # Map specific metrics — adjust metric codes as needed for your account
+        metrics = {m.strip(): metric_values.get(m.strip()) for m in FACTSET_FUNDAMENTALS_METRICS}
+
+        current_price = price_item.get("price")
+        # Placeholder mappings; update these metric codes to the ones that correspond
+        # to analyst targets and valuation ratios in your FactSet setup.
+        target_mean = metrics.get("FF_PX_TARGET_MEAN")
+        target_high = metrics.get("FF_PX_TARGET_HIGH")
+        target_low = metrics.get("FF_PX_TARGET_LOW")
+        pe_ratio = metrics.get("FF_PE_TRAIL")
+        ev_ebitda = metrics.get("FF_EV_EBITDA")
+
+        sector = price_item.get("sector") or "Default"
+        name = price_item.get("name") or price_item.get("requestId") or ticker
+        recommendation = "N/A"
+        num_analysts = 0
+        market_cap = price_item.get("marketCap")
 
         return {
             "ticker":         ticker,
@@ -403,7 +446,7 @@ def send_email(alerts: list, all_data: list):
   <div style="padding:20px 40px;background:#0f172a;border-top:1px solid #1e293b">
     <p style="margin:0;color:#334155;font-size:12px">
       ⚠️ This report is for informational purposes only and does not constitute financial advice.
-      Data sourced from Yahoo Finance. Always verify before making investment decisions.
+      Data sourced from FactSet. Always verify before making investment decisions.
     </p>
   </div>
 </div>
