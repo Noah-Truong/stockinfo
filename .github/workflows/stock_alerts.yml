@@ -1,0 +1,35 @@
+name: Stock Alert Check
+
+on:
+  schedule:
+    # Runs every day at 9:00 AM and 3:00 PM UTC (adjust to your timezone)
+    # 9:00 UTC = 4:00 AM EST / 1:00 AM PST
+    # 15:00 UTC = 10:00 AM EST / 7:00 AM PST
+    - cron: '0 9 * * 1-5'   # Weekdays 9AM UTC
+    - cron: '0 15 * * 1-5'  # Weekdays 3PM UTC
+
+  # Also lets you trigger it manually from GitHub's website
+  workflow_dispatch:
+
+jobs:
+  run-stock-alerts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance schedule pandas requests
+
+      - name: Run stock alert script
+        env:
+          SENDER_EMAIL:    ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: python stock_alerts.py --run-once
